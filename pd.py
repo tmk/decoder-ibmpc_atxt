@@ -174,9 +174,9 @@ class Decoder(srd.Decoder):
                 # clock:L, data:X
                 _, data_pin = self.wait({0: 'r'})
                 # clock:H, data:X
-                if self.samplerate and self.bitcount > 0:
+                if bool(self.samplerate) and self.bitcount > 0:
                     # timeout
-                    if 100 < (self.samplenum - self.bits[-1].es) * float(self.samplerate / 1000000):
+                    if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
                         self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['Timeout Error/Inhibit', 'TOE',  'E']])
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
@@ -241,10 +241,10 @@ class Decoder(srd.Decoder):
                     # TODO: check signal
                     self.state = 'TRANSIENT'
                     continue
-                elif self.samplerate and self.bitcount > 1:
+                elif bool(self.samplerate) and self.bitcount > 1:
                     # timeout
                     # start bit(bitount == 1) can be long and is not checked
-                    if 100 < (self.samplenum - self.bits[-1].es) * float(self.samplerate / 1000000):
+                    if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
                         self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['H->D Timeout Error', 'TOE',  'E']])
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
