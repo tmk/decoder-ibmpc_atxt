@@ -114,10 +114,10 @@ class Decoder(srd.Decoder):
 
             if self.state == 'DEVICE_TO_HOST':
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.DATA,
-                    ['D->H Data: %02x' % byte, 'D: %02x' % byte, '%02x' % byte]])
+                    ['D->H: %02X' % byte, 'D: %02X' % byte, '%02X' % byte]])
             else:
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.COMMAND,
-                    ['H->D Data: %02x' % byte, 'D: %02x' % byte, '%02x' % byte]])
+                    ['H->D: %02X' % byte, 'H: %02X' % byte, '%02X' % byte]])
 
         if self.bitcount == 10:
             byte = 0
