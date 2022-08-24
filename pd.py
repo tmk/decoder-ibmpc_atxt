@@ -26,9 +26,26 @@
 
 import sigrokdecode as srd
 from collections import namedtuple
+from enum import IntEnum
 
-class Ann:
-    BIT, START, STOP, PARITY_OK, PARITY_ERR, DATA, COMMAND, STATE, ERROR = range(9)
+class Ann(IntEnum):
+    BIT = 0
+    START = 1
+    STOP = 2
+    PARITY_OK = 3
+    PARITY_ERR = 4
+    DATA = 5
+    COMMAND = 6
+    STATE = 7
+    ERROR = 8
+
+class State(IntEnum):
+    IDLE = 0
+    INHIBIT = 1
+    REQUEST = 2
+    HOST_TO_DEVICE = 3
+    DEVICE_TO_HOST = 4
+    TRANSIENT = 5
 
 Bit = namedtuple('Bit', 'val ss es')
 
@@ -70,7 +87,7 @@ class Decoder(srd.Decoder):
         self.bits = []
         self.bitcount = 0
         # state: IDLE[H, H], INHIBIT[L, H], REQUEST[L, L], HOST_TO_DEVICE, DEVICE_TO_HOST, TRANSIENT
-        self.state = 'IDLE'
+        self.state = State.IDLE
 
     def metadata(self, key, value):
         if key == srd.SRD_CONF_SAMPLERATE:
@@ -121,7 +138,7 @@ class Decoder(srd.Decoder):
             for i in range(8):
                 byte |= (self.bits[i + 1].val << i)
 
-            if self.state == 'DEVICE_TO_HOST':
+            if self.state == State.DEVICE_TO_HOST:
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.DATA,
                     ['D->H: %02X' % byte, 'D: %02X' % byte, '%02X' % byte]])
             else:
@@ -139,7 +156,7 @@ class Decoder(srd.Decoder):
             else:
                 self.putx(9, [Ann.PARITY_ERR, ['Parity Error', 'Par Err', 'PE']])
 
-            if self.state == 'DEVICE_TO_HOST':
+            if self.state == State.DEVICE_TO_HOST:
                 # max width of stop bit determined from parity bit
                 width = self.bits[9].es - self.bits[9].ss
                 self.wait([{0: 'r'}, {'skip': width}])
@@ -174,21 +191,21 @@ class Decoder(srd.Decoder):
             # Sample data bits on the falling clock edge (assume the device
             # is the transmitter). Expect the data byte transmission to end
             # at the rising clock edge. Cope with the absence of host activity.
-            if (self.state == 'IDLE'):
+            if (self.state == State.IDLE):
                 # clock:H, data:H
                 clock_pin, data_pin = self.wait([{0: 'f'}, {1: 'f'}])
                 if (clock_pin == 0 and data_pin == 1):
-                    self.state = 'INHIBIT'
+                    self.state = State.INHIBIT
                 elif (clock_pin == 1 and data_pin == 0):
                     # start bit
                     self.handle_bits(data_pin)
-                    self.state = 'DEVICE_TO_HOST'
+                    self.state = State.DEVICE_TO_HOST
                 elif (clock_pin == 0 and data_pin == 0):
-                    self.state = 'TRANSIENT'
+                    self.state = State.TRANSIENT
                 elif (clock_pin == 1 and data_pin == 1):
-                    self.state = 'IDLE'
+                    self.state = State.IDLE
 
-            elif (self.state == 'DEVICE_TO_HOST'):
+            elif (self.state == State.DEVICE_TO_HOST):
                 _, data_pin = self.wait({0: 'r'})
 
                 if bool(self.samplerate) and self.bitcount > 0:
@@ -199,10 +216,10 @@ class Decoder(srd.Decoder):
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
                             # clock:H, data:H
-                            self.state = 'IDLE'
+                            self.state = State.IDLE
                         else:
                             # clock:H, data:L
-                            self.state = 'HOST_TO_DEVICE'
+                            self.state = State.HOST_TO_DEVICE
                             # start bit
                             self.handle_bits(data_pin)
                         continue
@@ -217,15 +234,15 @@ class Decoder(srd.Decoder):
                     clock_pin, data_pin = self.wait({'skip': 0})
 
                     if (clock_pin == 1 and data_pin == 1):
-                        self.state = 'IDLE'
+                        self.state = State.IDLE
                     elif (clock_pin == 1 and data_pin == 0):
-                        self.state = 'TRANSIENT'
+                        self.state = State.TRANSIENT
                     elif (clock_pin == 0 and data_pin == 1):
-                        self.state = 'INHIBIT'
+                        self.state = State.INHIBIT
                     elif (clock_pin == 0 and data_pin == 0):
-                        self.state = 'TRANSIENT'
+                        self.state = State.TRANSIENT
 
-            elif (self.state == 'INHIBIT'):
+            elif (self.state == State.INHIBIT):
                 # clock:L, data:H
                 ss = self.samplenum
                 clock_pin, data_pin = self.wait([{0: 'r'}, {1: 'e'}])
@@ -233,17 +250,17 @@ class Decoder(srd.Decoder):
                 self.put(ss, self.samplenum, self.out_ann, [Ann.STATE, ['Inhibit', 'INH',  'I']])
 
                 if (clock_pin == 1 and data_pin == 1):
-                    self.state = 'IDLE'
+                    self.state = State.IDLE
                 elif (clock_pin == 1 and data_pin == 0):
-                    self.state = 'HOST_TO_DEVICE'
+                    self.state = State.HOST_TO_DEVICE
                     # start bit
                     self.handle_bits(data_pin)
                 elif (clock_pin == 0 and data_pin == 1):
-                    self.state = 'INHIBIT'
+                    self.state = State.INHIBIT
                 elif (clock_pin == 0 and data_pin == 0):
-                    self.state = 'REQUEST'
+                    self.state = State.REQUEST
 
-            elif self.state == 'REQUEST':
+            elif self.state == State.REQUEST:
                 # clock:L, data:L
                 ss = self.samplenum
                 clock_pin, data_pin = self.wait([{0: 'e'}, {1: 'e'}])
@@ -251,17 +268,17 @@ class Decoder(srd.Decoder):
                 self.put(ss, self.samplenum, self.out_ann, [Ann.STATE, ['Request', 'REQ',  'R']])
 
                 if (clock_pin == 1 and data_pin == 1):
-                    self.state = 'IDLE'
+                    self.state = State.IDLE
                 elif (clock_pin == 1 and data_pin == 0):
-                    self.state = 'HOST_TO_DEVICE'
+                    self.state = State.HOST_TO_DEVICE
                     # start bit
                     self.handle_bits(data_pin)
                 elif (clock_pin == 0 and data_pin == 1):
-                    self.state = 'INHIBIT'
+                    self.state = State.INHIBIT
                 elif (clock_pin == 0 and data_pin == 0):
-                    self.state = 'REQUEST'
+                    self.state = State.REQUEST
 
-            elif (self.state == 'HOST_TO_DEVICE'):
+            elif (self.state == State.HOST_TO_DEVICE):
                 _, data_pin = self.wait({0: 'f'})
 
                 if bool(self.samplerate) and self.bitcount > 1:
@@ -273,10 +290,10 @@ class Decoder(srd.Decoder):
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
                             # clock:L, data:H
-                            self.state = 'INHIBIT'
+                            self.state = State.INHIBIT
                         else:
                             # clock:L, data:L
-                            self.state = 'REQUEST'
+                            self.state = State.REQUEST
                         continue
 
                 # read data at rising edge
@@ -285,20 +302,20 @@ class Decoder(srd.Decoder):
                 if self.bitcount == 11:
                     # ack/nak
                     self.handle_bits(data_pin)
-                    self.state = 'TRANSIENT'
+                    self.state = State.TRANSIENT
                     continue
                 else:
                     self.handle_bits(data_pin)
 
-            elif self.state == 'TRANSIENT':
+            elif self.state == State.TRANSIENT:
                 clock, data = self.wait([{0: 'e'}, {1: 'e'}])
 
                 # wait for stable state
                 if (clock == 1 and data == 1):
-                    self.state = 'IDLE'
+                    self.state = State.IDLE
                 elif (clock == 1 and data == 0):
-                    self.state = 'TRANSIENT'
+                    self.state = State.TRANSIENT
                 elif (clock == 0 and data == 1):
-                    self.state = 'INHIBIT'
+                    self.state = State.INHIBIT
                 elif (clock == 0 and data == 0):
-                    self.state = 'TRANSIENT'
+                    self.state = State.TRANSIENT
