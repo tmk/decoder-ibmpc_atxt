@@ -140,11 +140,12 @@ class Decoder(srd.Decoder):
                 self.putx(9, [Ann.PARITY_ERR, ['Parity Error', 'Par Err', 'PE']])
 
             if self.state == 'DEVICE_TO_HOST':
-                # stop bit width determined from parity bit
+                # max width of stop bit determined from parity bit
                 width = self.bits[9].es - self.bits[9].ss
+                self.wait([{0: 'r'}, {'skip': width}])
+
                 b = self.bits[-1]
-                self.bits[-1] = Bit(b.val, b.ss, b.es + width)
-                self.wait({'skip': width})
+                self.bits[-1] = Bit(b.val, b.ss, self.samplenum)
 
                 self.putx(10, [Ann.STOP, ['Stop bit', 'Stop', 'St', 'T']])
                 self.bits, self.bitcount = [], 0
