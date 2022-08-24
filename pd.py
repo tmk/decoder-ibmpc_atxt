@@ -135,7 +135,7 @@ class Decoder(srd.Decoder):
                 width = self.bits[2].es - self.bits[1].es
                 b = self.bits[-1]
                 self.bits[-1] = Bit(b.val, b.ss, b.es + width)
-                #self.wait({'skip': width})
+                self.wait({'skip': width})
 
                 self.putx(10, [Ann.STOP, ['Stop bit', 'Stop', 'St', 'T']])
                 self.bits, self.bitcount = [], 0
@@ -196,7 +196,16 @@ class Decoder(srd.Decoder):
                 # end
                 # clock:L, data:X
                 if self.bitcount == 0:
-                    self.state = 'TRANSIENT'
+                    clock_pin, data_pin = self.wait({'skip': 0})
+
+                    if (clock_pin == 1 and data_pin == 1):
+                        self.state = 'IDLE'
+                    elif (clock_pin == 1 and data_pin == 0):
+                        self.state = 'TRANSIENT'
+                    elif (clock_pin == 0 and data_pin == 1):
+                        self.state = 'INHIBIT'
+                    elif (clock_pin == 0 and data_pin == 0):
+                        self.state = 'TRANSIENT'
 
             elif (self.state == 'INHIBIT'):
                 # clock:L, data:H
