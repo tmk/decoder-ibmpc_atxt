@@ -128,7 +128,7 @@ class Decoder(srd.Decoder):
             if parity_ok:
                 self.putx(9, [Ann.PARITY_OK, ['Parity OK', 'Par OK', 'P']])
             else:
-                self.putx(9, [Ann.PARITY_ERR, ['Parity error', 'Par err', 'PE']])
+                self.putx(9, [Ann.PARITY_ERR, ['Parity Error', 'Par Err', 'PE']])
 
             if self.state == 'DEVICE_TO_HOST':
                 # stop bit width determined
@@ -175,9 +175,10 @@ class Decoder(srd.Decoder):
                 _, data_pin = self.wait({0: 'r'})
                 # clock:H, data:X
                 if bool(self.samplerate) and self.bitcount > 0:
-                    # timeout
+                    # timeout: 100us
                     if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
                         self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['Timeout Error/Inhibit', 'TOE',  'E']])
+                        # reset bitcount
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
                             self.state = 'IDLE'
@@ -242,10 +243,11 @@ class Decoder(srd.Decoder):
                     self.state = 'TRANSIENT'
                     continue
                 elif bool(self.samplerate) and self.bitcount > 1:
-                    # timeout
+                    # timeout: 100us
                     # start bit(bitount == 1) can be long and is not checked
                     if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
                         self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['H->D Timeout Error', 'TOE',  'E']])
+                        # reset bitcount
                         self.bits, self.bitcount = [], 0
                         if data_pin == 1:
                             # clock:L, data:H
