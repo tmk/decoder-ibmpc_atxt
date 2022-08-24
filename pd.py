@@ -87,6 +87,15 @@ class Decoder(srd.Decoder):
         self.put(self.bits[bit].ss, self.bits[bit].es, self.out_ann, ann)
 
     def handle_bits(self, datapin):
+        # bitcount  D->H            H->D
+        # --------------------------------------------
+        # 0         start bit       start bit
+        # 1         bit0            bit0
+        # 8         bit7            bit7
+        # 9         parity bit      parity bit
+        # 10        stop bit        stop bit
+        # 11        -               ack/nak
+
         # Ignore non start condition bits (useful during keyboard init).
         if self.bitcount == 0 and datapin == 1:
             return
@@ -131,8 +140,8 @@ class Decoder(srd.Decoder):
                 self.putx(9, [Ann.PARITY_ERR, ['Parity Error', 'Par Err', 'PE']])
 
             if self.state == 'DEVICE_TO_HOST':
-                # stop bit width determined
-                width = self.bits[2].es - self.bits[1].es
+                # stop bit width determined from parity bit
+                width = self.bits[9].es - self.bits[9].ss
                 b = self.bits[-1]
                 self.bits[-1] = Bit(b.val, b.ss, b.es + width)
                 self.wait({'skip': width})
@@ -142,7 +151,15 @@ class Decoder(srd.Decoder):
                 return
 
         if self.bitcount == 11:
-            self.putx(10, [Ann.STOP, ['Stop bit', 'Stop', 'St', 'T']])
+            # HOST_TO_DEVICE stop/ack
+            if datapin == 0:
+                # end of ack
+                self.wait({1: 'r'})
+                b = self.bits[10]
+                self.bits[10] = Bit(b.val, b.ss, self.samplenum)
+                self.putx(10, [Ann.STOP, ['Stop bit/ACK', 'Stop', 'St', 'T']])
+            else:
+                self.putx(10, [Ann.STOP, ['Stop bit/NAK', 'Stop', 'St', 'T']])
 
         # Find all 11 bits. Start + 8 data + odd parity + stop.
         if self.bitcount < 11:
@@ -248,7 +265,6 @@ class Decoder(srd.Decoder):
                 if self.bitcount == 1 + 8 + 1 + 1:
                     _, data_pin = self.wait({0: 'r'})
                     self.handle_bits(data_pin)
-                    # TODO: check signal
                     self.state = 'TRANSIENT'
                     continue
                 elif bool(self.samplerate) and self.bitcount > 1:
