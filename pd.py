@@ -107,7 +107,7 @@ class Decoder(srd.Decoder):
         self.put(self.bits[bit].ss, self.bits[bit].es, self.out_ann, ann)
 
     def handle_bits(self, datapin):
-        # bitcount  AT:D->H         AT:H->D         XT:D->H
+        # bits[]    AT:D->H         AT:H->D         XT:D->H
         # -----------------------------------------------------
         # 0         start bit(0)    start bit(0)    start bit(1)
         # 1         bit0            bit0            bit0
@@ -123,6 +123,20 @@ class Decoder(srd.Decoder):
         if self.bitcount > 0:
             b = self.bits[self.bitcount - 1]
             self.bits[self.bitcount - 1] = Bit(b.val, b.ss, self.samplenum)
+
+        if bool(self.samplerate) and self.bitcount > 0:
+            # timeout(us)
+            to = 100 if self.options['protocol'] == 'AT' else 500
+            # start bit of AT:H->D can be long and is not be checked
+            bc = 1 if (self.options['protocol'] == 'AT' and self.state == State.HOST_TO_DEVICE) else 0
+            # the last bit
+            b = self.bits[self.bitcount - 1]
+
+            if to < (b.es - b.ss) / (self.samplerate / 1000000) and self.bitcount > bc:
+                self.put(b.ss, b.es, self.out_ann, [Ann.ERROR, ['Timeout Error', 'TOE',  'E']])
+
+                self.bits, self.bitcount = [], 0
+                return
 
         # start bit annotation
         if self.bitcount == 1:
@@ -184,6 +198,9 @@ class Decoder(srd.Decoder):
             else:
                 self.putx(10, [Ann.STOP, ['Stop bit/NAK', 'Stop', 'St', 'T']])
 
+            self.bits, self.bitcount = [], 0
+            return
+
         # Find all 11 bits. Start + 8 data + odd parity + stop.
         if self.bitcount < 11:
             self.bitcount += 1
@@ -205,6 +222,7 @@ class Decoder(srd.Decoder):
             if (self.state == State.IDLE):
                 # clock:H, data:H
                 clock_pin, data_pin = self.wait([{0: 'f'}, {1: 'f'}])
+
                 if (clock_pin == 0 and data_pin == 1):
                     self.state = State.INHIBIT
                 elif (clock_pin == 1 and data_pin == 0):
@@ -219,39 +237,15 @@ class Decoder(srd.Decoder):
             elif (self.state == State.DEVICE_TO_HOST):
                 _, data_pin = self.wait({0: 'r'})
 
-                if bool(self.samplerate) and self.bitcount > 0:
-                    # timeout: 100us
-                    if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
-                        self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['D->H Timeout Error/Inhibit', 'TOE',  'E']])
-                        # reset bitcount
-                        self.bits, self.bitcount = [], 0
-                        if data_pin == 1:
-                            # clock:H, data:H
-                            self.state = State.IDLE
-                        else:
-                            # clock:H, data:L
-                            self.state = State.HOST_TO_DEVICE
-                            # start bit
-                            self.handle_bits(data_pin)
-                        continue
-
                 # read data at falling edge
                 clock_pin, data_pin = self.wait({0: 'f'})
+
                 self.handle_bits(data_pin)
 
-                # end
-                # clock:L, data:X
+                # stop bit or timeout
                 if self.bitcount == 0:
-                    clock_pin, data_pin = self.wait({'skip': 0})
-
-                    if (clock_pin == 1 and data_pin == 1):
-                        self.state = State.IDLE
-                    elif (clock_pin == 1 and data_pin == 0):
-                        self.state = State.TRANSIENT
-                    elif (clock_pin == 0 and data_pin == 1):
-                        self.state = State.INHIBIT
-                    elif (clock_pin == 0 and data_pin == 0):
-                        self.state = State.TRANSIENT
+                    self.state = State.TRANSIENT
+                    continue
 
             elif (self.state == State.INHIBIT):
                 # clock:L, data:H
@@ -289,39 +283,22 @@ class Decoder(srd.Decoder):
                 elif (clock_pin == 0 and data_pin == 0):
                     self.state = State.REQUEST
 
-            elif (self.state == State.HOST_TO_DEVICE):
+            elif self.state == State.HOST_TO_DEVICE:
                 _, data_pin = self.wait({0: 'f'})
-
-                if bool(self.samplerate) and self.bitcount > 1:
-                    # Interval between start bit and bit0 can be long
-                    # timeout: 100us
-                    if 100 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
-                        self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['H->D Timeout Error', 'TOE',  'E']])
-                        # reset bitcount
-                        self.bits, self.bitcount = [], 0
-                        if data_pin == 1:
-                            # clock:L, data:H
-                            self.state = State.INHIBIT
-                        else:
-                            # clock:L, data:L
-                            self.state = State.REQUEST
-                        continue
 
                 # read data at rising edge
                 _, data_pin = self.wait({0: 'r'})
 
-                if self.bitcount == 11:
-                    # ack/nak
-                    self.handle_bits(data_pin)
+                self.handle_bits(data_pin)
+
+                # ack/nak or timeout
+                if self.bitcount == 0:
                     self.state = State.TRANSIENT
                     continue
-                else:
-                    self.handle_bits(data_pin)
 
             elif self.state == State.TRANSIENT:
-                clock, data = self.wait([{0: 'e'}, {1: 'e'}])
+                clock, data = self.wait({'skip': 0})
 
-                # wait for stable state
                 if (clock == 1 and data == 1):
                     self.state = State.IDLE
                 elif (clock == 1 and data == 0):
@@ -330,6 +307,10 @@ class Decoder(srd.Decoder):
                     self.state = State.INHIBIT
                 elif (clock == 0 and data == 0):
                     self.state = State.TRANSIENT
+
+                # skip to next state
+                if self.state == State.TRANSIENT:
+                    self.wait([{0: 'e'}, {1: 'e'}])
 
     def decode_xt(self):
         while True:
@@ -351,32 +332,31 @@ class Decoder(srd.Decoder):
                     self.state = State.TRANSIENT
 
             elif (self.state == State.DEVICE_TO_HOST):
+                # XT protocol has virtually no timeout
+                #if bool(self.samplerate) and self.bitcount > 1:
+                #    # timeout: 500us
+                #    if 500 < (self.bits[-2].es - self.bits[-2].ss) / (self.samplerate / 1000000):
+                #        self.put(self.bits[-2].ss, self.bits[-2].es, self.out_ann, [Ann.ERROR, ['D->H Timeout Error/Inhibit', 'TOE',  'E']])
+                #        # reset bitcount
+                #        self.bits, self.bitcount = [], 0
+                #        self.state = State.TRANSIENT
+                #        continue
+
                 # clock:L, data:X
                 _, data_pin = self.wait({0: 'r'})
 
-                # XT protocol has virtually no timeout
-                if bool(self.samplerate) and self.bitcount > 0:
-                    # timeout: 500us
-                    if 500 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
-                        self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['D->H Timeout Error/Inhibit', 'TOE',  'E']])
-                        # reset bitcount
-                        self.bits, self.bitcount = [], 0
-                        if data_pin == 1:
-                            # clock:H, data:H
-                            self.state = State.IDLE
-                        else:
-                            # clock:H, data:L
-                            self.state = State.TRANSIENT
-                        continue
-
                 if self.bitcount == 9:
-                    # end of bit7
+                    # end at rising edge
                     self.handle_bits(data_pin)
-                    self.state = State.TRANSIENT
                 else:
                     # read data at falling edge
                     clock_pin, data_pin = self.wait({0: 'f'})
                     self.handle_bits(data_pin)
+
+                # end or timeout
+                if self.bitcount == 0:
+                    self.state = State.TRANSIENT
+                    continue
 
             elif self.state == State.TRANSIENT:
                 clock, data = self.wait([{0: 'e'}, {1: 'e'}])
