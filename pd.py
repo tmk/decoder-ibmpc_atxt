@@ -63,6 +63,9 @@ class Decoder(srd.Decoder):
         {'id': 'clk', 'name': 'Clock', 'desc': 'Clock line'},
         {'id': 'data', 'name': 'Data', 'desc': 'Data line'},
     )
+    options = (
+            {'id': 'protocol', 'desc': 'Signal protocol', 'default': 'AT', 'values': ('AT', 'XT')},
+    )
     annotations = (
         ('bit', 'Bit'),
         ('start-bit', 'Start bit'),
@@ -104,28 +107,24 @@ class Decoder(srd.Decoder):
         self.put(self.bits[bit].ss, self.bits[bit].es, self.out_ann, ann)
 
     def handle_bits(self, datapin):
-        # bitcount  D->H            H->D
-        # --------------------------------------------
-        # 0         start bit       start bit
-        # 1         bit0            bit0
-        # 8         bit7            bit7
-        # 9         parity bit      parity bit
-        # 10        stop bit        stop bit
-        # 11        -               ack/nak
-
-        # Ignore non start condition bits (useful during keyboard init).
-        if self.bitcount == 0 and datapin == 1:
-            return
+        # bitcount  AT:D->H         AT:H->D         XT:D->H
+        # -----------------------------------------------------
+        # 0         start bit(0)    start bit(0)    start bit(1)
+        # 1         bit0            bit0            bit0
+        # 8         bit7            bit7            bit7
+        # 9         parity bit      parity bit      end
+        # 10        stop bit        stop bit        -
+        # 11        -               ack/nak         -
 
         # Store individual bits and their start/end samplenumbers.
         self.bits.append(Bit(datapin, self.samplenum, self.samplenum))
 
-        # Fix up end sample numbers of the bits.
+        # Fix up end sample numbers of the last bit
         if self.bitcount > 0:
             b = self.bits[self.bitcount - 1]
             self.bits[self.bitcount - 1] = Bit(b.val, b.ss, self.samplenum)
 
-        # Annotation
+        # start bit annotation
         if self.bitcount == 1:
             self.putx(0, [Ann.START, ['Start bit', 'Start', 'S']])
 
@@ -133,6 +132,7 @@ class Decoder(srd.Decoder):
         if self.bitcount > 1 and self.bitcount < 11:
                 self.putb(self.bitcount - 1, Ann.BIT)
 
+        # data byte
         if self.bitcount == 9:
             byte = 0
             for i in range(8):
@@ -144,6 +144,11 @@ class Decoder(srd.Decoder):
             else:
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.COMMAND,
                     ['H->D: %02X' % byte, 'H: %02X' % byte, '%02X' % byte]])
+
+            # XT ends here
+            if self.options['protocol'] == 'XT':
+                self.bits, self.bitcount = [], 0
+                return
 
         if self.bitcount == 10:
             byte = 0
@@ -187,6 +192,12 @@ class Decoder(srd.Decoder):
         self.bits, self.bitcount = [], 0
 
     def decode(self):
+        if self.options['protocol'] == 'AT':
+            self.decode_at()
+        else:
+            self.decode_xt()
+
+    def decode_at(self):
         while True:
             # Sample data bits on the falling clock edge (assume the device
             # is the transmitter). Expect the data byte transmission to end
@@ -318,4 +329,67 @@ class Decoder(srd.Decoder):
                 elif (clock == 0 and data == 1):
                     self.state = State.INHIBIT
                 elif (clock == 0 and data == 0):
+                    self.state = State.TRANSIENT
+
+    def decode_xt(self):
+        while True:
+            if (self.state == State.IDLE):
+                # clock:H, data:H
+                clock_pin, data_pin = self.wait([{0: 'f'}, {1: 'f'}])
+
+                if (clock_pin == 1 and data_pin == 1):
+                    self.state = State.IDLE
+                elif (clock_pin == 1 and data_pin == 0):
+                    # inhibit
+                    self.state = State.TRANSIENT
+                elif (clock_pin == 0 and data_pin == 1):
+                    # start bit
+                    self.handle_bits(data_pin)
+                    self.state = State.DEVICE_TO_HOST
+                elif (clock_pin == 0 and data_pin == 0):
+                    # pseudo start bit
+                    self.state = State.TRANSIENT
+
+            elif (self.state == State.DEVICE_TO_HOST):
+                # clock:L, data:X
+                _, data_pin = self.wait({0: 'r'})
+
+                # XT protocol has virtually no timeout
+                if bool(self.samplerate) and self.bitcount > 0:
+                    # timeout: 500us
+                    if 500 < (self.samplenum - self.bits[-1].es) / (self.samplerate / 1000000):
+                        self.put(self.bits[-1].es, self.samplenum, self.out_ann, [Ann.ERROR, ['D->H Timeout Error/Inhibit', 'TOE',  'E']])
+                        # reset bitcount
+                        self.bits, self.bitcount = [], 0
+                        if data_pin == 1:
+                            # clock:H, data:H
+                            self.state = State.IDLE
+                        else:
+                            # clock:H, data:L
+                            self.state = State.TRANSIENT
+                        continue
+
+                if self.bitcount == 9:
+                    # end of bit7
+                    self.handle_bits(data_pin)
+                    self.state = State.TRANSIENT
+                else:
+                    # read data at falling edge
+                    clock_pin, data_pin = self.wait({0: 'f'})
+                    self.handle_bits(data_pin)
+
+            elif self.state == State.TRANSIENT:
+                clock, data = self.wait([{0: 'e'}, {1: 'e'}])
+
+                # wait for stable state
+                if (clock == 1 and data == 1):
+                    self.state = State.IDLE
+                elif (clock == 1 and data == 0):
+                    # inhibit
+                    self.state = State.TRANSIENT
+                elif (clock == 0 and data == 1):
+                    # reset / start bit
+                    self.state = State.TRANSIENT
+                elif (clock == 0 and data == 0):
+                    # pseudo start bit
                     self.state = State.TRANSIENT
