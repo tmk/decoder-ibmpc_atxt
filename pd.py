@@ -51,10 +51,10 @@ Bit = namedtuple('Bit', 'val ss es')
 
 class Decoder(srd.Decoder):
     api_version = 3
-    id = 'ibmpc_at'
-    name = 'IBMPC AT'
-    longname = 'IBMPC AT'
-    desc = 'IBMPC AT keyboard/mouse interface.'
+    id = 'ibmpc_atxt'
+    name = 'AT/XT'
+    longname = 'IBM PC AT/XT'
+    desc = 'IBM PC AT/XT keyboard/mouse interface.'
     license = 'gplv2+'
     inputs = ['logic']
     outputs = []
