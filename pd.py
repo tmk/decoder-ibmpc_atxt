@@ -57,14 +57,14 @@ class Decoder(srd.Decoder):
     desc = 'IBM PC AT/XT keyboard/mouse interface.'
     license = 'gplv2+'
     inputs = ['logic']
-    outputs = []
+    outputs = ['ibmpc_atxt']
     tags = ['PC']
     channels = (
         {'id': 'clk', 'name': 'Clock', 'desc': 'Clock line'},
         {'id': 'data', 'name': 'Data', 'desc': 'Data line'},
     )
     options = (
-            {'id': 'protocol', 'desc': 'Signal protocol', 'default': 'AT', 'values': ('AT', 'XT')},
+        {'id': 'protocol', 'desc': 'Signal protocol', 'default': 'AT', 'values': ('AT', 'XT')},
     )
     annotations = (
         ('bit', 'Bit'),
@@ -98,6 +98,7 @@ class Decoder(srd.Decoder):
 
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
+        self.out_python = self.register(srd.OUTPUT_PYTHON)
 
     def putb(self, bit, ann_idx):
         b = self.bits[bit]
@@ -155,9 +156,11 @@ class Decoder(srd.Decoder):
             if self.state == State.DEVICE_TO_HOST:
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.DATA,
                     ['D->H: %02X' % byte, 'D: %02X' % byte, '%02X' % byte]])
+                self.put(self.bits[1].ss, self.bits[8].es, self.out_python, ['D->H', byte])
             else:
                 self.put(self.bits[1].ss, self.bits[8].es, self.out_ann, [Ann.COMMAND,
                     ['H->D: %02X' % byte, 'H: %02X' % byte, '%02X' % byte]])
+                self.put(self.bits[1].ss, self.bits[8].es, self.out_python, ['H->D', byte])
 
             # XT ends here
             if self.options['protocol'] == 'XT':
