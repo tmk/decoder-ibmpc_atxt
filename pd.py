@@ -127,7 +127,7 @@ class Decoder(srd.Decoder):
 
         if bool(self.samplerate) and self.bitcount > 0:
             # timeout(us)
-            to = 100 if self.options['protocol'] == 'AT' else 500
+            to = 500
             # start bit of AT:H->D can be long and is not be checked
             bc = 1 if (self.options['protocol'] == 'AT' and self.state == State.HOST_TO_DEVICE) else 0
             # the last bit
