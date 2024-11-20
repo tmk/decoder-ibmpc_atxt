@@ -127,7 +127,7 @@ class Decoder(srd.Decoder):
 
         if bool(self.samplerate) and self.bitcount > 0:
             # timeout(us)
-            to = 500
+            to = 1000
             # start bit of AT:H->D can be long and is not be checked
             bc = 1 if (self.options['protocol'] == 'AT' and self.state == State.HOST_TO_DEVICE) else 0
             # the last bit
@@ -319,32 +319,23 @@ class Decoder(srd.Decoder):
         while True:
             if (self.state == State.IDLE):
                 # clock:H, data:H
-                clock_pin, data_pin = self.wait([{0: 'f'}, {1: 'f'}])
+                clock_pin, data_pin = self.wait([{0: 'e'}, {1: 'e'}])
 
                 if (clock_pin == 1 and data_pin == 1):
+                    # idle of XT clones
                     self.state = State.IDLE
                 elif (clock_pin == 1 and data_pin == 0):
-                    # inhibit
-                    self.state = State.TRANSIENT
+                    # inhibit or idle of IBM XT
+                    self.state = State.IDLE
                 elif (clock_pin == 0 and data_pin == 1):
                     # start bit
                     self.handle_bits(data_pin)
                     self.state = State.DEVICE_TO_HOST
                 elif (clock_pin == 0 and data_pin == 0):
-                    # pseudo start bit
+                    # pseudo start bit(RTS) of IBM XT
                     self.state = State.TRANSIENT
 
             elif (self.state == State.DEVICE_TO_HOST):
-                # XT protocol has virtually no timeout
-                #if bool(self.samplerate) and self.bitcount > 1:
-                #    # timeout: 500us
-                #    if 500 < (self.bits[-2].es - self.bits[-2].ss) / (self.samplerate / 1000000):
-                #        self.put(self.bits[-2].ss, self.bits[-2].es, self.out_ann, [Ann.ERROR, ['D->H Timeout Error/Inhibit', 'TOE',  'E']])
-                #        # reset bitcount
-                #        self.bits, self.bitcount = [], 0
-                #        self.state = State.TRANSIENT
-                #        continue
-
                 # clock:L, data:X
                 _, data_pin = self.wait({0: 'r'})
 
@@ -356,23 +347,21 @@ class Decoder(srd.Decoder):
                     clock_pin, data_pin = self.wait({0: 'f'})
                     self.handle_bits(data_pin)
 
-                # end or timeout
+                # end
                 if self.bitcount == 0:
-                    self.state = State.TRANSIENT
-                    continue
-
-            elif self.state == State.TRANSIENT:
-                clock, data = self.wait([{0: 'e'}, {1: 'e'}])
-
-                # wait for stable state
-                if (clock == 1 and data == 1):
                     self.state = State.IDLE
-                elif (clock == 1 and data == 0):
-                    # inhibit
+
+            elif (self.state == State.TRANSIENT):
+                # clock:L, data:X
+                clock_pin, data_pin = self.wait([{0: 'e'}, {1: 'e'}])
+
+                if (clock_pin == 1 and data_pin == 1):
+                    # idle of XT clones
+                    self.state = State.IDLE
+                elif (clock_pin == 1 and data_pin == 0):
+                    # inhibit or idle of IBM XT
+                    self.state = State.IDLE
+                elif (clock_pin == 0 and data_pin == 1):
                     self.state = State.TRANSIENT
-                elif (clock == 0 and data == 1):
-                    # reset / start bit
-                    self.state = State.TRANSIENT
-                elif (clock == 0 and data == 0):
-                    # pseudo start bit
+                elif (clock_pin == 0 and data_pin == 0):
                     self.state = State.TRANSIENT
